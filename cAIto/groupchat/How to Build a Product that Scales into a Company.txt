@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/How%20to%20Build%20a%20Product%20that%20Scales%20into%20a%20Company.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

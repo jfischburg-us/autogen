@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Growth%20Through%20Acquisitions%20Wharton%20Scale%20School.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

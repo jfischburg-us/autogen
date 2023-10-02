@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Generating%20and%20Evaluating%20Commercial%20Ideas.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

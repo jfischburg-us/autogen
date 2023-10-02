@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Building%20the%20Sustainable%20High%20Performance%20Organizations%20of%20Tomorrow%20Mimi%20Brooks%20HR%20Tech%202021.wav",
+      "status": "Succeeded"
+    }
+  ]
+}
