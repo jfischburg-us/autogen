@@ -9,14 +9,14 @@ from flaml import tune, BlendSearch
 from flaml.tune.space import is_constant
 from flaml.automl.logger import logger_formatter
 from .openai_utils import get_key
+from collections import defaultdict
 
 try:
     import openai
-    from openai.error import (
-        ServiceUnavailableError,
+    from openai import (
         RateLimitError,
         APIError,
-        InvalidRequestError,
+        BadRequestError,
         APIConnectionError,
         Timeout,
         AuthenticationError,
@@ -26,7 +26,10 @@ try:
 
     ERROR = None
 except ImportError:
-    ERROR = ImportError("please install openai and diskcache to use the autogen.oai subpackage.")
+    ERROR = ImportError(
+        "(Deprecated) The autogen.Completion class requires openai<1 and diskcache. "
+        "Please switch to autogen.OpenAIWrapper for openai>=1."
+    )
     openai_Completion = object
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -37,7 +40,7 @@ if not logger.handlers:
 
 
 class Completion(openai_Completion):
-    """A class for OpenAI completion API.
+    """(openai<1) A class for OpenAI completion API.
 
     It also supports: ChatCompletion, Azure OpenAI API.
     """
@@ -50,6 +53,7 @@ class Completion(openai_Completion):
         "gpt-3.5-turbo-16k",
         "gpt-3.5-turbo-16k-0613",
         "gpt-35-turbo",
+        "gpt-35-turbo-16k",
         "gpt-4",
         "gpt-4-32k",
         "gpt-4-32k-0314",  # deprecate in Sep
@@ -68,11 +72,14 @@ class Completion(openai_Completion):
         "text-davinci-002": 0.02,
         "text-davinci-003": 0.02,
         "gpt-3.5-turbo": (0.0015, 0.002),
+        "gpt-3.5-turbo-instruct": (0.0015, 0.002),
         "gpt-3.5-turbo-0301": (0.0015, 0.002),  # deprecate in Sep
         "gpt-3.5-turbo-0613": (0.0015, 0.002),
         "gpt-3.5-turbo-16k": (0.003, 0.004),
         "gpt-3.5-turbo-16k-0613": (0.003, 0.004),
-        "gpt-35-turbo": 0.002,
+        "gpt-35-turbo": (0.0015, 0.002),
+        "gpt-35-turbo-16k": (0.003, 0.004),
+        "gpt-35-turbo-instruct": (0.0015, 0.002),
         "gpt-4": (0.03, 0.06),
         "gpt-4-32k": (0.06, 0.12),
         "gpt-4-0314": (0.03, 0.06),  # deprecate in Sep
@@ -102,12 +109,12 @@ class Completion(openai_Completion):
         "prompt": "{prompt}",
     }
 
-    seed = 41
-    cache_path = f".cache/{seed}"
+    cache_seed = 41
+    cache_path = f".cache/{cache_seed}"
     # retry after this many seconds
-    retry_time = 10
+    retry_wait_time = 10
     # fail a request after hitting RateLimitError for this many seconds
-    retry_timeout = 120
+    max_retry_period = 120
     # time out for request to openai server
     request_timeout = 60
 
@@ -127,7 +134,7 @@ class Completion(openai_Completion):
             cache_path (str, Optional): The root path for the cache.
                 The complete cache path will be {cache_path}/{seed}.
         """
-        cls.seed = seed
+        cls.cache_seed = seed
         cls.cache_path = f"{cache_path_root}/{seed}"
 
     @classmethod
@@ -138,7 +145,7 @@ class Completion(openai_Completion):
             seed (int, Optional): The integer identifier for the pseudo seed.
                 If omitted, all caches under cache_path_root will be cleared.
             cache_path (str, Optional): The root path for the cache.
-                The complete cache path will be {cache_path}/{seed}.
+                The complete cache path will be {cache_path}/{cache_seed}.
         """
         if seed is None:
             shutil.rmtree(cache_path_root, ignore_errors=True)
@@ -157,6 +164,7 @@ class Completion(openai_Completion):
             value = {
                 "created_at": [],
                 "cost": [],
+                "token_count": [],
             }
             if "messages" in config:
                 messages = config["messages"]
@@ -168,6 +176,14 @@ class Completion(openai_Completion):
                 key = get_key([config["prompt"]] + [choice.get("text") for choice in response["choices"]])
             value["created_at"].append(cls._count_create)
             value["cost"].append(response["cost"])
+            value["token_count"].append(
+                {
+                    "model": response["model"],
+                    "prompt_tokens": response["usage"]["prompt_tokens"],
+                    "completion_tokens": response["usage"].get("completion_tokens", 0),
+                    "total_tokens": response["usage"]["total_tokens"],
+                }
+            )
             cls._history_dict[key] = value
             cls._count_create += 1
             return
@@ -181,10 +197,9 @@ class Completion(openai_Completion):
     def _get_response(cls, config: Dict, raise_on_ratelimit_or_timeout=False, use_cache=True):
         """Get the response from the openai api call.
 
-        Try cache first. If not found, call the openai api. If the api call fails, retry after retry_time.
+        Try cache first. If not found, call the openai api. If the api call fails, retry after retry_wait_time.
         """
         config = config.copy()
-        openai.api_key_path = config.pop("api_key_path", openai.api_key_path)
         key = get_key(config)
         if use_cache:
             response = cls._cache.get(key, None)
@@ -194,35 +209,34 @@ class Completion(openai_Completion):
                 return response
         openai_completion = (
             openai.ChatCompletion
-            if config["model"] in cls.chat_models or issubclass(cls, ChatCompletion)
+            if config["model"].replace("gpt-35-turbo", "gpt-3.5-turbo") in cls.chat_models
+            or issubclass(cls, ChatCompletion)
             else openai.Completion
         )
         start_time = time.time()
         request_timeout = cls.request_timeout
-        retry_timeout = config.pop("retry_timeout", cls.retry_timeout)
+        max_retry_period = config.pop("max_retry_period", cls.max_retry_period)
+        retry_wait_time = config.pop("retry_wait_time", cls.retry_wait_time)
         while True:
             try:
                 if "request_timeout" in config:
                     response = openai_completion.create(**config)
                 else:
                     response = openai_completion.create(request_timeout=request_timeout, **config)
-            except (
-                ServiceUnavailableError,
-                APIConnectionError,
-            ):
+            except APIConnectionError:
                 # transient error
-                logger.info(f"retrying in {cls.retry_time} seconds...", exc_info=1)
-                sleep(cls.retry_time)
+                logger.info(f"retrying in {retry_wait_time} seconds...", exc_info=1)
+                sleep(retry_wait_time)
             except APIError as err:
                 error_code = err and err.json_body and isinstance(err.json_body, dict) and err.json_body.get("error")
                 error_code = error_code and error_code.get("code")
                 if error_code == "content_filter":
                     raise
                 # transient error
-                logger.info(f"retrying in {cls.retry_time} seconds...", exc_info=1)
-                sleep(cls.retry_time)
+                logger.info(f"retrying in {retry_wait_time} seconds...", exc_info=1)
+                sleep(retry_wait_time)
             except (RateLimitError, Timeout) as err:
-                time_left = retry_timeout - (time.time() - start_time + cls.retry_time)
+                time_left = max_retry_period - (time.time() - start_time + retry_wait_time)
                 if (
                     time_left > 0
                     and isinstance(err, RateLimitError)
@@ -233,8 +247,8 @@ class Completion(openai_Completion):
                     if isinstance(err, Timeout):
                         request_timeout <<= 1
                     request_timeout = min(request_timeout, time_left)
-                    logger.info(f"retrying in {cls.retry_time} seconds...", exc_info=1)
-                    sleep(cls.retry_time)
+                    logger.info(f"retrying in {retry_wait_time} seconds...", exc_info=1)
+                    sleep(retry_wait_time)
                 elif raise_on_ratelimit_or_timeout:
                     raise
                 else:
@@ -242,10 +256,10 @@ class Completion(openai_Completion):
                     if use_cache and isinstance(err, Timeout):
                         cls._cache.set(key, response)
                     logger.warning(
-                        f"Failed to get response from openai api due to getting RateLimitError or Timeout for {retry_timeout} seconds."
+                        f"Failed to get response from openai api due to getting RateLimitError or Timeout for {max_retry_period} seconds."
                     )
                     return response
-            except InvalidRequestError:
+            except BadRequestError:
                 if "azure" in config.get("api_type", openai.api_type) and "model" in config:
                     # azure api uses "engine" instead of "model"
                     config["engine"] = config.pop("model").replace("gpt-3.5-turbo", "gpt-35-turbo")
@@ -556,6 +570,10 @@ class Completion(openai_Completion):
             dict: The optimized hyperparameter setting.
             tune.ExperimentAnalysis: The tuning results.
         """
+        logger.warning(
+            "tuning via Completion.tune is deprecated in pyautogen v0.2 and openai>=1. "
+            "flaml.tune supports tuning more generically."
+        )
         if ERROR:
             raise ERROR
         space = cls.default_search_space.copy()
@@ -581,23 +599,31 @@ class Completion(openai_Completion):
         cls._prompts = space.get("prompt")
         if cls._prompts is None:
             cls._messages = space.get("messages")
-            assert isinstance(cls._messages, list) and isinstance(
-                cls._messages[0], (dict, list)
-            ), "messages must be a list of dicts or a list of lists."
+            if not all((isinstance(cls._messages, list), isinstance(cls._messages[0], (dict, list)))):
+                error_msg = "messages must be a list of dicts or a list of lists."
+                logger.error(error_msg)
+                raise AssertionError(error_msg)
             if isinstance(cls._messages[0], dict):
                 cls._messages = [cls._messages]
             space["messages"] = tune.choice(list(range(len(cls._messages))))
         else:
-            assert space.get("messages") is None, "messages and prompt cannot be provided at the same time."
-            assert isinstance(cls._prompts, (str, list)), "prompt must be a string or a list of strings."
+            if space.get("messages") is not None:
+                error_msg = "messages and prompt cannot be provided at the same time."
+                logger.error(error_msg)
+                raise AssertionError(error_msg)
+            if not isinstance(cls._prompts, (str, list)):
+                error_msg = "prompt must be a string or a list of strings."
+                logger.error(error_msg)
+                raise AssertionError(error_msg)
             if isinstance(cls._prompts, str):
                 cls._prompts = [cls._prompts]
             space["prompt"] = tune.choice(list(range(len(cls._prompts))))
         cls._stops = space.get("stop")
         if cls._stops:
-            assert isinstance(
-                cls._stops, (str, list)
-            ), "stop must be a string, a list of strings, or a list of lists of strings."
+            if not isinstance(cls._stops, (str, list)):
+                error_msg = "stop must be a string, a list of strings, or a list of lists of strings."
+                logger.error(error_msg)
+                raise AssertionError(error_msg)
             if not (isinstance(cls._stops, list) and isinstance(cls._stops[0], list)):
                 cls._stops = [cls._stops]
             space["stop"] = tune.choice(list(range(len(cls._stops))))
@@ -684,7 +710,7 @@ class Completion(openai_Completion):
         context: Optional[Dict] = None,
         use_cache: Optional[bool] = True,
         config_list: Optional[List[Dict]] = None,
-        filter_func: Optional[Callable[[Dict, Dict, Dict], bool]] = None,
+        filter_func: Optional[Callable[[Dict, Dict], bool]] = None,
         raise_on_ratelimit_or_timeout: Optional[bool] = True,
         allow_format_str_template: Optional[bool] = False,
         **config,
@@ -711,18 +737,18 @@ class Completion(openai_Completion):
                     "model": "gpt-4",
                     "api_key": os.environ.get("AZURE_OPENAI_API_KEY"),
                     "api_type": "azure",
-                    "api_base": os.environ.get("AZURE_OPENAI_API_BASE"),
+                    "base_url": os.environ.get("AZURE_OPENAI_API_BASE"),
                     "api_version": "2023-03-15-preview",
                 },
                 {
                     "model": "gpt-3.5-turbo",
                     "api_key": os.environ.get("OPENAI_API_KEY"),
                     "api_type": "open_ai",
-                    "api_base": "https://api.openai.com/v1",
+                    "base_url": "https://api.openai.com/v1",
                 },
                 {
                     "model": "llama-7B",
-                    "api_base": "http://127.0.0.1:8080",
+                    "base_url": "http://127.0.0.1:8080",
                     "api_type": "open_ai",
                 }
             ],
@@ -730,7 +756,7 @@ class Completion(openai_Completion):
         )
         ```
 
-            filter_func (Callable, Optional): A function that takes in the context, the config and the response and returns a boolean to indicate whether the response is valid. E.g.,
+            filter_func (Callable, Optional): A function that takes in the context and the response and returns a boolean to indicate whether the response is valid. E.g.,
 
         ```python
         def yes_or_no_filter(context, config, response):
@@ -743,9 +769,11 @@ class Completion(openai_Completion):
                 When set to False, -1 will be returned when all configs fail.
             allow_format_str_template (bool, Optional): Whether to allow format string template in the config.
             **config: Configuration for the openai API call. This is used as parameters for calling openai API.
-                Besides the parameters for the openai API call, it can also contain a seed (int) for the cache.
-                This is useful when implementing "controlled randomness" for the completion.
-                Also, the "prompt" or "messages" parameter can contain a template (str or Callable) which will be instantiated with the context.
+                The "prompt" or "messages" parameter can contain a template (str or Callable) which will be instantiated with the context.
+                Besides the parameters for the openai API call, it can also contain:
+                - `max_retry_period` (int): the total time (in seconds) allowed for retrying failed requests.
+                - `retry_wait_time` (int): the time interval to wait (in seconds) before retrying a failed request.
+                - `cache_seed` (int) for the cache. This is useful when implementing "controlled randomness" for the completion.
 
         Returns:
             Responses from OpenAI API, with additional fields.
@@ -754,8 +782,20 @@ class Completion(openai_Completion):
                 - `config_id`: the index of the config in the config_list that is used to generate the response.
                 - `pass_filter`: whether the response passes the filter function. None if no filter is provided.
         """
+        logger.warning(
+            "Completion.create is deprecated in pyautogen v0.2 and openai>=1. "
+            "The new openai requires initiating a client for inference. "
+            "Please refer to https://microsoft.github.io/autogen/docs/Use-Cases/enhanced_inference#api-unification"
+        )
         if ERROR:
             raise ERROR
+
+        # Warn if a config list was provided but was empty
+        if type(config_list) is list and len(config_list) == 0:
+            logger.warning(
+                "Completion was provided with a config_list, but the list was empty. Adopting default OpenAI behavior, which reads from the 'model' parameter instead."
+            )
+
         if config_list:
             last = len(config_list) - 1
             cost = 0
@@ -763,9 +803,9 @@ class Completion(openai_Completion):
                 base_config = config.copy()
                 base_config["allow_format_str_template"] = allow_format_str_template
                 base_config.update(each_config)
-                if i < last and filter_func is None and "retry_timeout" not in base_config:
-                    # retry_timeout = 0 to avoid retrying when no filter is given
-                    base_config["retry_timeout"] = 0
+                if i < last and filter_func is None and "max_retry_period" not in base_config:
+                    # max_retry_period = 0 to avoid retrying when no filter is given
+                    base_config["max_retry_period"] = 0
                 try:
                     response = cls.create(
                         context,
@@ -775,16 +815,14 @@ class Completion(openai_Completion):
                     )
                     if response == -1:
                         return response
-                    pass_filter = filter_func is None or filter_func(
-                        context=context, base_config=config, response=response
-                    )
+                    pass_filter = filter_func is None or filter_func(context=context, response=response)
                     if pass_filter or i == last:
                         response["cost"] = cost + response["cost"]
                         response["config_id"] = i
                         response["pass_filter"] = pass_filter
                         return response
                     cost += response["cost"]
-                except (AuthenticationError, RateLimitError, Timeout, InvalidRequestError):
+                except (AuthenticationError, RateLimitError, Timeout, BadRequestError):
                     logger.debug(f"failed with config {i}", exc_info=1)
                     if i == last:
                         raise
@@ -793,11 +831,11 @@ class Completion(openai_Completion):
             return cls._get_response(
                 params, raise_on_ratelimit_or_timeout=raise_on_ratelimit_or_timeout, use_cache=False
             )
-        seed = cls.seed
-        if "seed" in params:
-            cls.set_cache(params.pop("seed"))
+        cache_seed = cls.cache_seed
+        if "cache_seed" in params:
+            cls.set_cache(params.pop("cache_seed"))
         with diskcache.Cache(cls.cache_path) as cls._cache:
-            cls.set_cache(seed)
+            cls.set_cache(cache_seed)
             return cls._get_response(params, raise_on_ratelimit_or_timeout=raise_on_ratelimit_or_timeout)
 
     @classmethod
@@ -966,7 +1004,10 @@ class Completion(openai_Completion):
         elif isinstance(agg_method, dict):
             for key in metric_keys:
                 metric_agg_method = agg_method[key]
-                assert callable(metric_agg_method), "please provide a callable for each metric"
+                if not callable(metric_agg_method):
+                    error_msg = "please provide a callable for each metric"
+                    logger.error(error_msg)
+                    raise AssertionError(error_msg)
                 result_agg[key] = metric_agg_method([r[key] for r in result_list])
         else:
             raise ValueError(
@@ -994,7 +1035,7 @@ class Completion(openai_Completion):
         Returns:
             The cost in USD. 0 if the model is not supported.
         """
-        model = response["model"]
+        model = response.get("model")
         if model not in cls.price1K:
             return 0
             # raise ValueError(f"Unknown model: {model}")
@@ -1046,6 +1087,44 @@ class Completion(openai_Completion):
         return cls._history_dict
 
     @classmethod
+    def print_usage_summary(cls) -> Dict:
+        """Return the usage summary."""
+        if cls._history_dict is None:
+            print("No usage summary available.", flush=True)
+
+        token_count_summary = defaultdict(lambda: {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+
+        if not cls._history_compact:
+            source = cls._history_dict.values()
+            total_cost = sum(msg_pair["response"]["cost"] for msg_pair in source)
+        else:
+            # source = cls._history_dict["token_count"]
+            # total_cost = sum(cls._history_dict['cost'])
+            total_cost = sum(sum(value_list["cost"]) for value_list in cls._history_dict.values())
+            source = (
+                token_data for value_list in cls._history_dict.values() for token_data in value_list["token_count"]
+            )
+
+        for entry in source:
+            if not cls._history_compact:
+                model = entry["response"]["model"]
+                token_data = entry["response"]["usage"]
+            else:
+                model = entry["model"]
+                token_data = entry
+
+            token_count_summary[model]["prompt_tokens"] += token_data["prompt_tokens"]
+            token_count_summary[model]["completion_tokens"] += token_data["completion_tokens"]
+            token_count_summary[model]["total_tokens"] += token_data["total_tokens"]
+
+        print(f"Total cost: {total_cost}", flush=True)
+        for model, counts in token_count_summary.items():
+            print(
+                f"Token count summary for model {model}: prompt_tokens: {counts['prompt_tokens']}, completion_tokens: {counts['completion_tokens']}, total_tokens: {counts['total_tokens']}",
+                flush=True,
+            )
+
+    @classmethod
     def start_logging(
         cls, history_dict: Optional[Dict] = None, compact: Optional[bool] = True, reset_counter: Optional[bool] = True
     ):
@@ -1092,6 +1171,12 @@ class Completion(openai_Completion):
                 while the compact history dict has a linear size.
             reset_counter (bool): whether to reset the counter of the number of API calls.
         """
+        logger.warning(
+            "logging via Completion.start_logging is deprecated in pyautogen v0.2. "
+            "logging via OpenAIWrapper will be added back in a future release."
+        )
+        if ERROR:
+            raise ERROR
         cls._history_dict = {} if history_dict is None else history_dict
         cls._history_compact = compact
         cls._count_create = 0 if reset_counter or cls._count_create is None else cls._count_create
@@ -1103,7 +1188,7 @@ class Completion(openai_Completion):
 
 
 class ChatCompletion(Completion):
-    """A class for OpenAI API ChatCompletion."""
+    """(openai<1) A class for OpenAI API ChatCompletion. Share the same API as Completion."""
 
     default_search_space = Completion.default_search_space.copy()
     default_search_space["model"] = tune.choice(["gpt-3.5-turbo", "gpt-4"])

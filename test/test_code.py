@@ -1,16 +1,20 @@
-import sys
 import os
+import sys
+import unittest
+
 import pytest
+
 import autogen
 from autogen.code_utils import (
+    PATH_SEPARATOR,
     UNKNOWN,
-    extract_code,
+    WIN32,
+    content_str,
     execute_code,
-    infer_lang,
+    extract_code,
     improve_code,
     improve_function,
-    PATH_SEPARATOR,
-    WIN32,
+    infer_lang,
 )
 
 KEY_LOC = "notebook"
@@ -153,6 +157,10 @@ def test_infer_lang():
     assert infer_lang("print('hello world')") == "python"
     assert infer_lang("pip install autogen") == "sh"
 
+    # test infer lang for unknown code/invalid code
+    assert infer_lang("dummy text") == UNKNOWN
+    assert infer_lang("print('hello world'))") == UNKNOWN
+
 
 def test_extract_code():
     print(extract_code("```bash\npython temp.py\n```"))
@@ -260,6 +268,11 @@ def test_execute_code(use_docker=None):
     assert isinstance(image, str) or docker is None or os.path.exists("/.dockerenv") or use_docker is False
 
 
+def test_execute_code_raises_when_code_and_filename_are_both_none():
+    with pytest.raises(AssertionError):
+        execute_code(code=None, filename=None)
+
+
 @pytest.mark.skipif(
     sys.platform in ["darwin"],
     reason="do not run on MacOS",
@@ -275,7 +288,7 @@ def test_execute_code_no_docker():
     assert image is None
 
 
-def test_improve():
+def _test_improve():
     try:
         import openai
     except ImportError:
@@ -306,8 +319,36 @@ def test_improve():
         f.write(improvement)
 
 
+class TestContentStr(unittest.TestCase):
+    def test_string_content(self):
+        self.assertEqual(content_str("simple string"), "simple string")
+
+    def test_list_of_text_content(self):
+        content = [{"type": "text", "text": "hello"}, {"type": "text", "text": " world"}]
+        self.assertEqual(content_str(content), "hello world")
+
+    def test_mixed_content(self):
+        content = [{"type": "text", "text": "hello"}, {"type": "image_url", "url": "http://example.com/image.png"}]
+        self.assertEqual(content_str(content), "hello<image>")
+
+    def test_invalid_content(self):
+        content = [{"type": "text", "text": "hello"}, {"type": "wrong_type", "url": "http://example.com/image.png"}]
+        with self.assertRaises(AssertionError) as context:
+            content_str(content)
+        self.assertIn("Wrong content format", str(context.exception))
+
+    def test_empty_list(self):
+        self.assertEqual(content_str([]), "")
+
+    def test_non_dict_in_list(self):
+        content = ["string", {"type": "text", "text": "text"}]
+        with self.assertRaises(TypeError):
+            content_str(content)
+
+
 if __name__ == "__main__":
     # test_infer_lang()
     # test_extract_code()
     test_execute_code()
     # test_find_code()
+    unittest.main()

@@ -2,9 +2,20 @@ import pytest
 from autogen.agentchat import ConversableAgent
 
 
+@pytest.fixture
+def conversable_agent():
+    return ConversableAgent(
+        "conversable_agent_0",
+        max_consecutive_auto_reply=10,
+        code_execution_config=False,
+        llm_config=False,
+        human_input_mode="NEVER",
+    )
+
+
 def test_trigger():
     agent = ConversableAgent("a0", max_consecutive_auto_reply=0, llm_config=False, human_input_mode="NEVER")
-    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, human_input_mode="NEVER")
+    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, llm_config=False, human_input_mode="NEVER")
     agent.register_reply(agent1, lambda recipient, messages, sender, config: (True, "hello"))
     agent1.initiate_chat(agent, message="hi")
     assert agent1.last_message(agent)["content"] == "hello"
@@ -42,7 +53,7 @@ def test_trigger():
 
 def test_context():
     agent = ConversableAgent("a0", max_consecutive_auto_reply=0, llm_config=False, human_input_mode="NEVER")
-    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, human_input_mode="NEVER")
+    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, llm_config=False, human_input_mode="NEVER")
     agent1.send(
         {
             "content": "hello {name}",
@@ -76,9 +87,51 @@ def test_context():
     # expect hello there to be printed
 
 
+def test_generate_code_execution_reply():
+    agent = ConversableAgent(
+        "a0", max_consecutive_auto_reply=10, code_execution_config=False, llm_config=False, human_input_mode="NEVER"
+    )
+
+    dummy_messages = [
+        {
+            "content": "no code block",
+            "role": "user",
+        },
+        {
+            "content": "no code block",
+            "role": "user",
+        },
+    ]
+
+    code_message = {
+        "content": '```python\nprint("hello world")\n```',
+        "role": "user",
+    }
+
+    # scenario 1: if code_execution_config is not provided, the code execution should return false, none
+    assert agent.generate_code_execution_reply(dummy_messages, config=False) == (False, None)
+
+    # scenario 2: if code_execution_config is provided, but no code block is found, the code execution should return false, none
+    assert agent.generate_code_execution_reply(dummy_messages, config={}) == (False, None)
+
+    # scenario 3: if code_execution_config is provided, and code block is found, but it's not within the range of last_n_messages, the code execution should return false, none
+    assert agent.generate_code_execution_reply([code_message] + dummy_messages, config={"last_n_messages": 1}) == (
+        False,
+        None,
+    )
+
+    # scenario 4: if code_execution_config is provided, and code block is found, and it's within the range of last_n_messages, the code execution should return true, code block
+    agent._code_execution_config = {"last_n_messages": 3, "use_docker": False}
+    assert agent.generate_code_execution_reply([code_message] + dummy_messages) == (
+        True,
+        "exitcode: 0 (execution succeeded)\nCode output: \nhello world\n",
+    )
+    assert agent._code_execution_config["last_n_messages"] == 3
+
+
 def test_max_consecutive_auto_reply():
     agent = ConversableAgent("a0", max_consecutive_auto_reply=2, llm_config=False, human_input_mode="NEVER")
-    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, human_input_mode="NEVER")
+    agent1 = ConversableAgent("a1", max_consecutive_auto_reply=0, llm_config=False, human_input_mode="NEVER")
     assert agent.max_consecutive_auto_reply() == agent.max_consecutive_auto_reply(agent1) == 2
     agent.update_max_consecutive_auto_reply(1)
     assert agent.max_consecutive_auto_reply() == agent.max_consecutive_auto_reply(agent1) == 1
@@ -106,8 +159,8 @@ def test_max_consecutive_auto_reply():
 
 
 def test_conversable_agent():
-    dummy_agent_1 = ConversableAgent(name="dummy_agent_1", human_input_mode="ALWAYS")
-    dummy_agent_2 = ConversableAgent(name="dummy_agent_2", human_input_mode="TERMINATE")
+    dummy_agent_1 = ConversableAgent(name="dummy_agent_1", llm_config=False, human_input_mode="ALWAYS")
+    dummy_agent_2 = ConversableAgent(name="dummy_agent_2", llm_config=False, human_input_mode="TERMINATE")
 
     # monkeypatch.setattr(sys, "stdin", StringIO("exit"))
     dummy_agent_1.receive("hello", dummy_agent_2)  # receive a str
@@ -153,13 +206,19 @@ def test_conversable_agent():
     dummy_agent_1.update_system_message("new system message")
     assert dummy_agent_1.system_message == "new system message"
 
+    dummy_agent_3 = ConversableAgent(name="dummy_agent_3", llm_config=False, human_input_mode="TERMINATE")
+    with pytest.raises(KeyError):
+        dummy_agent_1.last_message(dummy_agent_3)
+
 
 def test_generate_reply():
     def add_num(num_to_be_added):
         given_num = 10
         return num_to_be_added + given_num
 
-    dummy_agent_2 = ConversableAgent(name="user_proxy", human_input_mode="TERMINATE", function_map={"add_num": add_num})
+    dummy_agent_2 = ConversableAgent(
+        name="user_proxy", llm_config=False, human_input_mode="TERMINATE", function_map={"add_num": add_num}
+    )
     messsages = [{"function_call": {"name": "add_num", "arguments": '{ "num_to_be_added": 5 }'}, "role": "assistant"}]
 
     # when sender is None, messages is provided
@@ -168,15 +227,26 @@ def test_generate_reply():
     ), "generate_reply not working when sender is None"
 
     # when sender is provided, messages is None
-    dummy_agent_1 = ConversableAgent(name="dummy_agent_1", human_input_mode="ALWAYS")
+    dummy_agent_1 = ConversableAgent(name="dummy_agent_1", llm_config=False, human_input_mode="ALWAYS")
     dummy_agent_2._oai_messages[dummy_agent_1] = messsages
     assert (
         dummy_agent_2.generate_reply(messages=None, sender=dummy_agent_1)["content"] == "15"
     ), "generate_reply not working when messages is None"
 
 
+def test_generate_reply_raises_on_messages_and_sender_none(conversable_agent):
+    with pytest.raises(AssertionError):
+        conversable_agent.generate_reply(messages=None, sender=None)
+
+
+@pytest.mark.asyncio
+async def test_a_generate_reply_raises_on_messages_and_sender_none(conversable_agent):
+    with pytest.raises(AssertionError):
+        await conversable_agent.a_generate_reply(messages=None, sender=None)
+
+
 if __name__ == "__main__":
-    test_trigger()
+    # test_trigger()
     # test_context()
     # test_max_consecutive_auto_reply()
-    # test_conversable_agent(pytest.monkeypatch)
+    test_conversable_agent()

@@ -165,5 +165,5 @@ key_aoai.txt
 base_aoai.txt
 wolfram.txt
 
-# Key Files
-youtube.txt
+# DB on disk for TeachableAgent
+tmp/
