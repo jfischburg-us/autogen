@@ -22,9 +22,20 @@ CONTAINER_NAME = "caito"
 blob_service_client = BlobServiceClient.from_connection_string(CONNECTION_STRING)
 container_client = blob_service_client.get_container_client(CONTAINER_NAME)
 
+<<<<<<< HEAD
 # Cognitive/Speech Services Setup
 SPEECH_KEY = "e6def55c6d904eefa7afe1efa63ac84f"
 SERVICE_REGION = "eastus2"
+=======
+# Cognitive/Speech Services Configuration
+speech_key = "3f80ab84124d4539aeef2610dab29da0"
+service_region = "eastus2"
+
+connection_string = "DefaultEndpointsProtocol=https;AccountName=caito;AccountKey=o0Qzvj9Z4hWJ0uJwAPMjEEPJt3H6/9LGvm7bwCQKKC1ripO/eLtRQthDTmCbOa+lyFDaLPt4MNKv+AStbNvzPQ==;EndpointSuffix=core.windows.net"
+blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+container_name = "caito"  # Replace with the name of your container
+container_client = blob_service_client.get_container_client(container_name)
+>>>>>>> ab302d1 (Merging autogen from upstream fork.)
 
 
 def download_audio(video_url, download_path, title, audio_format="wav"):
