@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Fireside%20Chat%20Creating%20a%20Culture%20of%20Innovation%20Harvard%20IT%20Summit%202023.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

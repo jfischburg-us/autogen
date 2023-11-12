@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Frameworks%20and%20Building%20Blocks.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

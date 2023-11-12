@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/CTO%20Panel%20Discussion%20a%20Day%20in%20the%20Life.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

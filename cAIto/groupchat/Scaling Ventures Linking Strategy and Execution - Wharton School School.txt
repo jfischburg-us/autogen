@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Scaling%20Ventures%20Linking%20Strategy%20and%20Execution%20-%20Wharton%20School%20School.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/Entry%20Strategies%20With%20real%20world%20examples%20International%20Business%20From%20A%20Business%20Professor.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

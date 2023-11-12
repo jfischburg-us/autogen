@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/The%20Insightful%20Leader%20Live%20Do%20You%20Have%20Executive%20Presence.wav",
+      "status": "Succeeded"
+    }
+  ]
+}

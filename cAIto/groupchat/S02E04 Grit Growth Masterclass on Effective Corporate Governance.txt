@@ -1,0 +1,10 @@
+{
+  "successfulTranscriptionsCount": 1,
+  "failedTranscriptionsCount": 0,
+  "details": [
+    {
+      "source": "https://caito.blob.core.windows.net/caito/audio/S02E04%20Grit%20Growth%20Masterclass%20on%20Effective%20Corporate%20Governance.wav",
+      "status": "Succeeded"
+    }
+  ]
+}
